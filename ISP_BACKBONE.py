@@ -1,9 +1,9 @@
 import numpy as np
 import matrix_add
 import time
-import DPC_module 
-import BLC_module
-import LSC_module
+from wrappers import DPC_module 
+from wrappers import BLC_module
+from wrappers import LSC_module
 
 import cv2
 
