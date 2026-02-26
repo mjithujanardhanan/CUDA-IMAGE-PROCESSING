@@ -3,6 +3,7 @@ import matrix_add
 import time
 import DPC_module 
 import BLC_module
+import LSC_module
 
 import cv2
 
@@ -20,6 +21,7 @@ length = x.shape[0]
 
 x = DPC_module.DPC(x.flatten(),width,length, 10)
 x = BLC_module.BLC(x,np.array([5,10,15,20]),width,length) 
+x = LSC_module.LSC(x, width, length, 0.04,0.05,0.05,0.04)
                    
 
 x=x.reshape((length, width))
