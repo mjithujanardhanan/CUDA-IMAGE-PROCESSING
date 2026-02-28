@@ -1,3 +1,6 @@
+/* A kernel for dead pixel consealment using directional derivatives*/
+
+
 #include<cuda_runtime.h>
 #include<stdio.h>
 #include<cmath>
@@ -11,24 +14,24 @@
 namespace py=pybind11;
 
 
-#define block_dim 16
+#define block_dim 16  // Dimension of each cuda block. Each block contains 256 threads representing a pixel each
 
 /* this program is an execution of Defective Pixel Consealment on digital bayer domain images*/
-__global__ void DP_kernel(int* Image , int* image_out, int width, int Length, int threshold)
+__global__ void DP_kernel(int* Image , int* image_out, int width, int Length, int threshold)  // Image - the image on which the operation is to be performed. Image out- the output image. Threshold- the threshold for dpc correction
 {
 
     // directional gradient calculation
-    long j=blockIdx.x * blockDim.x + threadIdx.x, i=blockIdx.y * blockDim.y + threadIdx.y;
-    long idx= (i)* width  + (j);
-    if(i<Length && j<width)
+    long j=blockIdx.x * blockDim.x + threadIdx.x, i=blockIdx.y * blockDim.y + threadIdx.y; // i,j are 2d image coordinates calculated from the thread id
+    long idx= (i)* width  + (j);  // idx is the id of (i,j) element in the flattened image
+    if(i<Length && j<width) // out of bounds check
     {
 
-        int up = (i-2)<0?i+2:i-2;
+        int up = (i-2)<0?i+2:i-2;               //reflective padding implementation.(important in dpc calculation)
         int down = (i+2)>=Length?i-2:i+2;
         int left = (j-2)<0?j+2:j-2;
         int right=(j+2)>=width?j-2:j+2;
 
-        int p1 = up * width + j;
+        int p1 = up * width + j;            //assigning ids to neighbor elements ( future updation to shared memory will remove this part)
         int p2 = up * width + left;
         int p3 = i * width + left;
         int p4 = down * width + left;
@@ -38,13 +41,13 @@ __global__ void DP_kernel(int* Image , int* image_out, int width, int Length, in
         int p8 = up * width + right;
 
 
-        int d1,d2,d3,d4;
+        int d1,d2,d3,d4;                    //gradient calculation
         d1 = abs(Image[p5]-Image[p1]);
         d2 = abs(Image[p6]-Image[p2]);
         d3 = abs(Image[p7]-Image[p3]);
         d4 = abs(Image[p8]-Image[p4]);
 
-        int min=d1, neighbor_avg = (Image[p5]+Image[p1])>>1;
+        int min=d1, neighbor_avg = (Image[p5]+Image[p1])>>1; //finding min neighbor_average. most similarity will be along the direction of least gradient.
         if(d2<min)
         {
             min=d2;
@@ -61,14 +64,14 @@ __global__ void DP_kernel(int* Image , int* image_out, int width, int Length, in
             neighbor_avg = (Image[p8]+Image[p4])>>1;
         }
 
-        if(abs(Image[idx] -neighbor_avg) >threshold)
+        if(abs(Image[idx] -neighbor_avg) >threshold)    //DPC in effect. check against threshold to classify and replace the Dead Pixel.
         {
-            image_out[idx] = neighbor_avg;
+            image_out[idx] = neighbor_avg ;
         }
 
         else 
         {
-            image_out[idx] = Image[idx];
+            image_out[idx] = Image[idx] ;
         }
 
     }
@@ -81,27 +84,31 @@ __global__ void DP_kernel(int* Image , int* image_out, int width, int Length, in
 
 
 
-py::array_t<int> DPC(py::array_t<int> Image, int Width, int Length, int threshold)
+py::array_t<int> DPC(py::array_t<int> Image, int Width, int Length, int threshold )  // python input (Image- flattened image, rest are intuitive)
 {
     auto buffer = Image.request();
+    if(buffer.ndim != 1)            //error check to see if flattened image is passed.
+        throw std::runtime_error("image must be Flattened :: DPC module");
+    if(buffer.size < (Width * Length))
+        throw std::runtime_error("Wrong image size :: DPC module");
     int *Input = static_cast<int*>(buffer.ptr);
     long array_size = static_cast<int>(buffer.size);
 
 
-    int *D_Image, *D_image_out;
-    cudaMalloc( &D_Image, array_size * sizeof(int));
+    int *D_Image, *D_image_out; //pointer declaration for gpu memory creation.
+    cudaMalloc( &D_Image, array_size * sizeof(int)); // creating memory pointers on gpu memory for image.
     cudaMalloc( &D_image_out, array_size * sizeof(int));
 
-    cudaMemcpy(D_Image , Input, array_size * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(D_Image , Input, array_size * sizeof(int), cudaMemcpyHostToDevice); //copying image data to gpu memory
     const int blockx= (Width%16 == 0)?(Width/16):(Width/16 +1),blocky= (Length%16 == 0)?(Length/16):(Length/16 +1);
 
 
-    DP_kernel<<<dim3(blockx,blocky),dim3(16,16)>>>(D_Image,D_image_out, Width, Length, threshold);
-    cudaDeviceSynchronize();
+    DP_kernel<<<dim3(blockx,blocky),dim3(16,16)>>>(D_Image,D_image_out, Width, Length, threshold); //calling __global__ function (CUDA kernel)
+    cudaDeviceSynchronize(); //wait until all kernels stop executing.
 
-    cudaMemcpy(Input,D_image_out,array_size * sizeof(int),cudaMemcpyDeviceToHost);
+    cudaMemcpy(Input,D_image_out,array_size * sizeof(int),cudaMemcpyDeviceToHost); // copy data back to ram memory.
 
-    cudaFree(D_Image);
+    cudaFree(D_Image);   //destroy memory created in gpu.
     cudaFree(D_image_out);
 
     return Image;
